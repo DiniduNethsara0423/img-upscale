@@ -23,6 +23,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Configure git
+        run: |
+          git config --local user.name "DiniduNethsara0423"
+          git config --local user.email "dinidubandara2004@gmail.com"
+
       - name: Deploy to GitHub Pages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
