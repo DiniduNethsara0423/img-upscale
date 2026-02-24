@@ -16,31 +16,22 @@ const Test = Loadable(lazy(() => import("./pages/Test/Test")));
 
 //--------------------------------------------------------------//
 
-const router = createBrowserRouter([
-  // {
-  //   path: "/conferences/:shortName/:year",
-  //   element: <Registration />,
-  // },
+const router = createBrowserRouter(
+  [
+    {
+      path: "/",
+      element: <Login />,
+    },
+    {
+      path: "/test",
+      element: <Test />,
+    },
+  ],
   {
-    path: "/",
-    element: <Login />,
+    basename: "/img-upscale",
+  }
+);
 
-  },
-  {
-    path: "/test",
-    element: <Test />,
-  },
-  // {
-  //   path: "/",
-  //   element: <Layout />,
-  //   children: [
-  //     {
-  //       path: "/home",
-  //       element: <Home />,
-  //     },
-  //   ],
-  // },
-]);
 
 const App = () => {
   return (

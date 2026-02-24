@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import Pica from "pica";
 import {
   Box,
   Button,
@@ -23,7 +24,7 @@ const Login = () => {
   const [scale, setScale] = useState(2);
   const [originalSize, setOriginalSize] = useState(null);
   const [format, setFormat] = useState('png');
-  const [quality, setQuality] = useState(0.92);
+  const [quality, setQuality] = useState(1);
   const [mode, setMode] = useState('scale'); // 'scale' | 'preset' | 'custom'
   const [preset, setPreset] = useState('1920x1080');
   const [customW, setCustomW] = useState('');
@@ -31,8 +32,21 @@ const Login = () => {
   const inputRef = useRef(null);
   const canvasRef = useRef(null);
   const originalCanvasRef = useRef(null);
+  const picaRef = useRef(null);
 
-  useEffect(() => {}, []);
+  useEffect(() => {
+    // Cleanup object URLs on unmount
+    return () => {
+      files.forEach((f) => URL.revokeObjectURL(f.url));
+    };
+  }, [files]);
+
+  const ensurePica = () => {
+    if (!picaRef.current) {
+      picaRef.current = Pica();
+    }
+    return picaRef.current;
+  };
 
   const computeTarget = (imgWidth, imgHeight) => {
     if (mode === 'scale') {
@@ -64,7 +78,7 @@ const Login = () => {
     octx.drawImage(imgBitmap, 0, 0);
     // upscale according to current mode
     const target = computeTarget(imgBitmap.width, imgBitmap.height);
-    await upscaleToCanvas(imgBitmap, target, canvasRef.current);
+    await upscaleCanvasToCanvas(ocanvas, target, canvasRef.current);
   };
 
   const handleFileChange = async (e) => {
@@ -73,6 +87,10 @@ const Login = () => {
     if (selected.length > 10) {
       alert('Please select up to 10 images. Only the first 10 will be used.');
     }
+
+    // Cleanup previously created object URLs
+    files.forEach((f) => URL.revokeObjectURL(f.url));
+
     const limited = selected.slice(0, 10);
     const mapped = limited.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
     setFiles(mapped);
@@ -80,46 +98,31 @@ const Login = () => {
     setTimeout(() => loadAndProcess(0), 0);
   };
 
-  // upscale with iterative doubling for better quality
-  async function upscaleToCanvas(imgBitmap, target, outCanvas) {
+  // High-quality upscale using pica (Lanczos) with an unsharp mask.
+  async function upscaleCanvasToCanvas(srcCanvas, target, outCanvas) {
     const targetW = Math.round(target.w);
     const targetH = Math.round(target.h);
 
-    // start from bitmap
-    let src = imgBitmap;
-
-    // If scaleFactor is not power of two, we'll iteratively scale by up to 2x steps
-    let currentW = src.width;
-    let currentH = src.height;
-
-    // create an intermediate canvas
-    const offscreen = document.createElement("canvas");
-    const ctx = offscreen.getContext("2d");
-
-    while (currentW < targetW || currentH < targetH) {
-      const nextW = Math.min(currentW * 2, targetW);
-      const nextH = Math.min(currentH * 2, targetH);
-      offscreen.width = nextW;
-      offscreen.height = nextH;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.clearRect(0, 0, nextW, nextH);
-      ctx.drawImage(src, 0, 0, currentW, currentH, 0, 0, nextW, nextH);
-
-      // convert to ImageBitmap for next iteration
-      src = await createImageBitmap(offscreen);
-      currentW = src.width;
-      currentH = src.height;
-    }
-
-    // final draw to output canvas
     outCanvas.width = targetW;
     outCanvas.height = targetH;
-    const outCtx = outCanvas.getContext("2d");
-    outCtx.imageSmoothingEnabled = true;
-    outCtx.imageSmoothingQuality = "high";
-    outCtx.clearRect(0, 0, targetW, targetH);
-    outCtx.drawImage(src, 0, 0, targetW, targetH);
+
+    try {
+      const pica = ensurePica();
+      await pica.resize(srcCanvas, outCanvas, {
+        quality: 3,
+        alpha: true,
+        unsharpAmount: 120,
+        unsharpRadius: 0.7,
+        unsharpThreshold: 1,
+      });
+    } catch (err) {
+      // Fallback to native canvas interpolation if pica fails
+      const outCtx = outCanvas.getContext("2d");
+      outCtx.imageSmoothingEnabled = true;
+      outCtx.imageSmoothingQuality = "high";
+      outCtx.clearRect(0, 0, targetW, targetH);
+      outCtx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+    }
   }
 
   const handleScaleChange = async (e) => {
@@ -128,9 +131,8 @@ const Login = () => {
     // if there's an image in original canvas, upscale it
     const ocanvas = originalCanvasRef.current;
     if (ocanvas.width > 0 && ocanvas.height > 0) {
-      const bitmap = await createImageBitmap(ocanvas);
-      const target = computeTarget(bitmap.width, bitmap.height);
-      await upscaleToCanvas(bitmap, target, canvasRef.current);
+      const target = computeTarget(ocanvas.width, ocanvas.height);
+      await upscaleCanvasToCanvas(ocanvas, target, canvasRef.current);
     }
   };
 
@@ -138,9 +140,8 @@ const Login = () => {
     setMode(e.target.value);
     const ocanvas = originalCanvasRef.current;
     if (ocanvas.width > 0 && ocanvas.height > 0) {
-      const bitmap = await createImageBitmap(ocanvas);
-      const target = computeTarget(bitmap.width, bitmap.height);
-      await upscaleToCanvas(bitmap, target, canvasRef.current);
+      const target = computeTarget(ocanvas.width, ocanvas.height);
+      await upscaleCanvasToCanvas(ocanvas, target, canvasRef.current);
     }
   };
 
@@ -148,18 +149,16 @@ const Login = () => {
     setPreset(e.target.value);
     const ocanvas = originalCanvasRef.current;
     if (ocanvas.width > 0 && ocanvas.height > 0) {
-      const bitmap = await createImageBitmap(ocanvas);
-      const target = computeTarget(bitmap.width, bitmap.height);
-      await upscaleToCanvas(bitmap, target, canvasRef.current);
+      const target = computeTarget(ocanvas.width, ocanvas.height);
+      await upscaleCanvasToCanvas(ocanvas, target, canvasRef.current);
     }
   };
 
   const handleCustomChange = async () => {
     const ocanvas = originalCanvasRef.current;
     if (ocanvas.width > 0 && ocanvas.height > 0) {
-      const bitmap = await createImageBitmap(ocanvas);
-      const target = computeTarget(bitmap.width, bitmap.height);
-      await upscaleToCanvas(bitmap, target, canvasRef.current);
+      const target = computeTarget(ocanvas.width, ocanvas.height);
+      await upscaleCanvasToCanvas(ocanvas, target, canvasRef.current);
     }
   };
 
@@ -252,6 +251,8 @@ const Login = () => {
                     <MenuItem value={2}>2x</MenuItem>
                     <MenuItem value={3}>3x</MenuItem>
                     <MenuItem value={4}>4x</MenuItem>
+                    <MenuItem value={6}>6x</MenuItem>
+                    <MenuItem value={8}>8x</MenuItem>
                   </Select>
                 </FormControl>
               )}
@@ -302,7 +303,13 @@ const Login = () => {
                 labelId="format-label"
                 value={format}
                 label="Output Type"
-                onChange={(e) => setFormat(e.target.value)}
+                onChange={(e) => {
+                  const nextFormat = e.target.value;
+                  setFormat(nextFormat);
+                  // reasonable defaults to avoid overly-compressed exports
+                  if (nextFormat === 'jpeg') setQuality(1);
+                  if (nextFormat === 'webp') setQuality(1);
+                }}
               >
                 <MenuItem value={'png'}>PNG</MenuItem>
                 <MenuItem value={'jpeg'}>JPEG</MenuItem>
@@ -317,7 +324,7 @@ const Login = () => {
                 </Typography>
                 <Slider
                   value={quality}
-                  min={0.1}
+                  min={0.5}
                   max={1}
                   step={0.01}
                   onChange={(_, v) => setQuality(v)}
